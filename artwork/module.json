@@ -1,0 +1,32 @@
+{
+  "api": 1,
+  "name": "Artwork",
+  "version": "0.2.0",
+  "author": "FranjeGueje",
+  "description": "Find community artwork for your games and shortcuts (images from steamgriddb.com).",
+  "order": 20,
+  "tab": "Art",
+  "no_qam": true,
+  "settings": [
+    {
+      "key": "api_key", "type": "text", "label": "API key", "default": "", "max_length": 64,
+      "placeholder": "paste your key", "hint": "steamgriddb.com → Preferences → API"
+    },
+    {
+      "section": "Filters",
+      "items": [
+        { "key": "nsfw", "type": "toggle", "label": "Adult content", "default": false },
+        { "key": "humor", "type": "toggle", "label": "Humor", "default": true },
+        { "key": "epilepsy", "type": "toggle", "label": "Epilepsy warning", "default": true },
+        {
+          "key": "image_type", "type": "radio", "label": "Images", "default": "any",
+          "options": [
+            { "value": "static", "label": "Static" },
+            { "value": "animated", "label": "Animated" },
+            { "value": "any", "label": "Both" }
+          ]
+        }
+      ]
+    }
+  ]
+}
