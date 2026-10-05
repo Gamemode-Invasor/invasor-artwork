@@ -10,9 +10,9 @@ and apply it to your Steam games and non-Steam shortcuts, from Steam's gamepad U
 - **Big images:** over 20 MB, Artwork asks before downloading. Nothing over 128 MB is downloaded.
 
 ## Requirements
-- Invasor (module API 1) with `author` support in module.json.
+- Invasor 0.1.3 or newer (module API 1); older ones refuse to install it (`min_core` in module.json).
 - Your own SteamGridDB API key (free): steamgriddb.com → log in with Steam → Preferences → API. Paste it in the
-  module's Settings.
+  module's Settings; it is shown as dots (masked on screen only, it is stored as plain text on your device).
 
 ## Build, test and install
 With the core checked out next to this repository (`../invasor`):
