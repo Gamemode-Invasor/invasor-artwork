@@ -146,7 +146,7 @@ def apply(appid, kind, url, allow_big=False):
         raise ctx.Unavailable(f"can't write {folder}: {e}") from None
     # The live refresh sends the whole image to Steam (as base64): give big ones time.
     refreshed = _refresh(
-        "Apps.SetCustomArtworkForApp", int(appid), base64.b64encode(data).decode(), path.suffix[1:], grid.KINDS[kind][1],
+        "Apps.SetCustomArtworkForApp", int(appid), base64.b64encode(data).decode(), grid.sniff(data)[1:], grid.KINDS[kind][1],
         timeout=15 + len(data) // (2 << 20),
     )
     grid.keep_newest(folder, appid, kind)  # Steam may have written its own copy

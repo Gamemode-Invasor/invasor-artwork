@@ -20,7 +20,7 @@ class Files(unittest.TestCase):
     def test_names_follow_steam(self):
         self.assertEqual(grid.write(self.folder, "2100", "capsule", PNG).name, "2100p.png")
         self.assertEqual(grid.write(self.folder, "2100", "wide", JPG).name, "2100.jpg")
-        self.assertEqual(grid.write(self.folder, "2100", "hero", WEBP).name, "2100_hero.webp")
+        self.assertEqual(grid.write(self.folder, "2100", "hero", WEBP).name, "2100_hero.png")
         self.assertEqual(grid.write(self.folder, "2100", "logo", PNG).name, "2100_logo.png")
         self.assertEqual(set(grid.current(self.folder, "2100")), {"capsule", "wide", "hero", "logo"})
 
