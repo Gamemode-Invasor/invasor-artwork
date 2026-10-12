@@ -25,7 +25,7 @@ KINDS = {
     "logo": ("_logo", 2),
     "wide": ("", 3),
 }
-EXTS = (".png", ".jpg", ".jpeg", ".webp")
+EXTS = (".png", ".jpg", ".jpeg", ".webp")  # .webp: only to clean up files an older version wrote
 MAX_BYTES = 128 << 20  # same hard cap as sgdb.MAX_DOWNLOAD
 # What Steam writes itself when a logo is set without a position (else shortcuts show none).
 DEFAULT_LOGO_POSITION = {"nVersion": 1, "logoPosition": {"pinnedPosition": "BottomLeft", "nWidthPct": 50, "nHeightPct": 50}}
@@ -106,7 +106,9 @@ def write(folder, appid, kind, data):
     if len(data) > MAX_BYTES:
         raise ValueError("image too large")
     folder.mkdir(parents=True, exist_ok=True)
-    target = folder / f"{appid}{KINDS[kind][0]}{ext}"
+    # Steam only looks for .png/.jpg and reads the content, not the name: a WebP (animated
+    # art comes as one) is stored as .png, as Steam's own tools do.
+    target = folder / f"{appid}{KINDS[kind][0]}{'.png' if ext == '.webp' else ext}"
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=".invasor-")
     try:
         with os.fdopen(fd, "wb") as f:
