@@ -4,6 +4,7 @@ Each user brings their own API key (steamgriddb.com -> Preferences -> API): the 
 built into the Decky plugin is reserved for it. The key is sent only to
 www.steamgriddb.com and never logged.
 
+The images themselves are downloaded by backend.py with ctx.http (check_download_url first).
 Pure stdlib, no Invasor imports: tested on its own with a fake opener (tests/test_sgdb.py).
 """
 import json
@@ -11,13 +12,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-API = "https://www.steamgriddb.com/api/v2"
+API_ORIGIN = "https://www.steamgriddb.com"
+API = API_ORIGIN + "/api/v2"
 USER_AGENT = "invasor-artwork"
 TIMEOUT = 15
 # Usual artwork is well under SOFT_LIMIT; bigger (animated art can be 20+ MB) needs the
-# user's OK; nothing over MAX_DOWNLOAD is ever downloaded.
+# user's OK; nothing over MAX_DOWNLOAD (ctx.http's limit for a file the user chose) is downloaded.
 SOFT_LIMIT = 20 << 20
-MAX_DOWNLOAD = 128 << 20
+MAX_DOWNLOAD = 100 << 20
 # Downloads are only ever fetched from SteamGridDB's own hosts.
 DOWNLOAD_HOSTS = ("steamgriddb.com",)
 
@@ -93,8 +95,17 @@ def _game(raw):
     return {"id": raw.get("id"), "name": raw.get("name"), "verified": bool(raw.get("verified"))}
 
 
+class _ApiOnly(urllib.request.HTTPRedirectHandler):
+    """urllib copies every header to a redirect, Authorization too: the key stays on the API's host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith(API_ORIGIN + "/"):
+            raise urllib.error.URLError(f"redirected away from SteamGridDB's API: {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class Client:
-    def __init__(self, key, opener=urllib.request.urlopen):
+    def __init__(self, key, opener=urllib.request.build_opener(_ApiOnly).open):
         self.key = (key or "").strip()
         self._open = opener
 
@@ -139,31 +150,11 @@ class Client:
         data = self._get(f"/{RESOURCE[kind]}/{target}", params(kind, filters, page))
         return [_image(i) for i in data or [] if isinstance(i, dict) and i.get("url")]
 
-    def download(self, url, allow_big=False):
-        """The bytes of an image on SteamGridDB's CDN (nothing else is fetched). Over
-        SOFT_LIMIT it raises SGDBError(status=413, size=bytes) unless allow_big, checked
-        from Content-Length before the body is read; over MAX_DOWNLOAD it always fails."""
-        parts = urllib.parse.urlparse(url or "")
-        host = parts.hostname or ""
-        if parts.scheme != "https" or not any(host == h or host.endswith("." + h) for h in DOWNLOAD_HOSTS):
-            raise SGDBError(f"refusing to download from {host or url!r}: not SteamGridDB")
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        try:
-            with self._open(req, timeout=TIMEOUT * 4) as res:
-                length = getattr(res, "headers", None) and res.headers.get("Content-Length")
-                if length and length.isdigit():
-                    _check_size(int(length), allow_big)
-                data = res.read(MAX_DOWNLOAD + 1)
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise SGDBError(f"download failed ({getattr(e, 'reason', e)})") from None
-        _check_size(len(data), allow_big)
-        return data
 
-
-def _check_size(size, allow_big):
-    if size > MAX_DOWNLOAD:
-        raise SGDBError(f"image too large (over {MAX_DOWNLOAD >> 20} MB)")
-    if size > SOFT_LIMIT and not allow_big:
-        err = SGDBError(f"image is {size / (1 << 20):.0f} MB", 413)
-        err.size = size
-        raise err
+def check_download_url(url):
+    """Images are only downloaded from SteamGridDB's own hosts, over https; else SGDBError."""
+    parts = urllib.parse.urlparse(url or "")
+    host = parts.hostname or ""
+    if parts.scheme != "https" or not any(host == h or host.endswith("." + h) for h in DOWNLOAD_HOSTS):
+        raise SGDBError(f"refusing to download from {host or url!r}: not SteamGridDB")
+    return url

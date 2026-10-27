@@ -1,4 +1,5 @@
-"""Steam's custom artwork folder: userdata/<account>/config/grid/.
+"""Steam's custom artwork folder: userdata/<account>/config/grid/ (backend.py finds it
+with ctx.paths.grid_dir()).
 
 The file names are Steam's own, stable for years and used by every SteamGridDB tool:
   <appid>p.<ext>      capsule (portrait grid)
@@ -11,12 +12,8 @@ Pure stdlib, no Invasor imports: tested on its own (tests/test_grid.py).
 """
 import json
 import os
-import re
 import tempfile
-from pathlib import Path
 
-STEAM_ROOT = Path.home() / ".local/share/Steam"
-STEAMID64_BASE = 76561197960265728
 
 # kind -> (file suffix, Steam's eAssetType)
 KINDS = {
@@ -26,7 +23,7 @@ KINDS = {
     "wide": ("", 3),
 }
 EXTS = (".png", ".jpg", ".jpeg", ".webp")  # .webp: only to clean up files an older version wrote
-MAX_BYTES = 128 << 20  # same hard cap as sgdb.MAX_DOWNLOAD
+MAX_BYTES = 100 << 20  # same hard cap as sgdb.MAX_DOWNLOAD
 # What Steam writes itself when a logo is set without a position (else shortcuts show none).
 DEFAULT_LOGO_POSITION = {"nVersion": 1, "logoPosition": {"pinnedPosition": "BottomLeft", "nWidthPct": 50, "nHeightPct": 50}}
 
@@ -42,40 +39,6 @@ def check_appid(appid):
     if not (appid.isascii() and appid.isdigit()) or len(appid) > 10:
         raise ValueError(f"invalid appid {appid!r}")
     return appid
-
-
-def _login_users(root):
-    """{accountid: (most_recent, timestamp)} from config/loginusers.vdf (text VDF)."""
-    try:
-        text = (root / "config" / "loginusers.vdf").read_text(errors="replace")
-    except OSError:
-        return {}
-    users = {}
-    for m in re.finditer(r'"(\d{17})"\s*\{([^{}]*)\}', text):
-        fields = {k.lower(): v for k, v in re.findall(r'"([^"]+)"\s+"([^"]*)"', m.group(2))}
-        account = str(int(m.group(1)) - STEAMID64_BASE)
-        stamp = int(fields["timestamp"]) if fields.get("timestamp", "").isdigit() else 0
-        users[account] = (fields.get("mostrecent") == "1", stamp)
-    return users
-
-
-def current_user(root=STEAM_ROOT):
-    """The Steam account whose library is in use: the only one in userdata/, or the
-    most recent login of loginusers.vdf. None if it can't be told."""
-    try:
-        accounts = sorted(d.name for d in (root / "userdata").iterdir() if d.is_dir() and d.name.isdigit() and d.name != "0")
-    except OSError:
-        return None
-    if len(accounts) == 1:
-        return accounts[0]
-    logins = {a: v for a, v in _login_users(root).items() if a in accounts}
-    if not logins:
-        return None
-    return max(logins, key=lambda a: logins[a])  # MostRecent first, then the newest timestamp
-
-
-def grid_dir(user, root=STEAM_ROOT):
-    return root / "userdata" / user / "config" / "grid"
 
 
 def sniff(data):
@@ -113,6 +76,7 @@ def write(folder, appid, kind, data):
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
+        os.chmod(tmp, 0o644)  # as Steam's own files (mkstemp makes it 0600)
         os.replace(tmp, target)
     except BaseException:
         os.unlink(tmp)

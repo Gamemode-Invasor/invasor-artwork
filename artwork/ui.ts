@@ -163,14 +163,14 @@ function artworkWindow(ctx: ModuleCtx, game: Game): WindowSpec {
           ctx.toast(`Applying ${kind.label.toLowerCase()}…`);
           try {
             const args = { appid, kind: kind.id, url: img.url };
-            let r = await ctx.call<{ refreshed?: boolean; needs_confirm?: boolean; size_mb?: number }>("apply", args);
+            let r = await ctx.call<{ refreshed?: boolean; needs_confirm?: boolean; over_mb?: number }>("apply", args);
             if (r.needs_confirm) {
               const ok = await ui.confirm(
-                `This image is ${r.size_mb} MB, much bigger than usual artwork. Download and apply it anyway?`,
+                `This image is over ${r.over_mb} MB, much bigger than usual artwork. Download and apply it anyway?`,
                 { ok: "Download" },
               );
               if (!ok) return;
-              ctx.toast(`Downloading ${r.size_mb} MB…`);
+              ctx.toast("Downloading…");
               r = await ctx.call("apply", { ...args, allow_big: true });
             }
             ctx.toast(r.refreshed ? `${kind.label} applied` : `${kind.label} applied: restart Steam to see it`);
