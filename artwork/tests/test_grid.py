@@ -24,6 +24,11 @@ class Files(unittest.TestCase):
         self.assertEqual(grid.write(self.folder, "2100", "logo", PNG).name, "2100_logo.png")
         self.assertEqual(set(grid.current(self.folder, "2100")), {"capsule", "wide", "hero", "logo"})
 
+    def test_written_like_steams_own_files(self):
+        path = grid.write(self.folder, "5", "capsule", PNG)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+        self.assertEqual([p.name for p in self.folder.iterdir()], ["5p.png"])  # no temporary leftovers
+
     def test_one_file_per_kind(self):
         grid.write(self.folder, "7", "capsule", PNG)
         grid.write(self.folder, "7", "capsule", JPG)
@@ -61,47 +66,6 @@ class Files(unittest.TestCase):
         with self.assertRaises(ValueError):
             grid.write(self.folder, "5", "icon", PNG)
         self.assertFalse(any(self.folder.glob("*")) if self.folder.exists() else False)
-
-
-class User(unittest.TestCase):
-    def setUp(self):
-        d = tempfile.TemporaryDirectory()
-        self.addCleanup(d.cleanup)
-        self.root = Path(d.name)
-        (self.root / "userdata" / "0").mkdir(parents=True)  # Steam's anonymous folder: ignored
-
-    def users(self, *accounts):
-        for a in accounts:
-            (self.root / "userdata" / a).mkdir()
-
-    def login(self, entries):
-        (self.root / "config").mkdir(exist_ok=True)
-        body = "".join(
-            f'\t"{grid.STEAMID64_BASE + int(a)}"\n\t{{\n\t\t"AccountName"\t\t"x"\n\t\t"timestamp"\t\t"{ts}"\n'
-            + (f'\t\t"MostRecent"\t\t"{mr}"\n' if mr is not None else "")
-            + "\t}\n"
-            for a, ts, mr in entries
-        )
-        (self.root / "config" / "loginusers.vdf").write_text('"users"\n{\n' + body + "}\n")
-
-    def test_single_account(self):
-        self.users("1000")
-        self.assertEqual(grid.current_user(self.root), "1000")
-
-    def test_several_accounts_newest_login(self):
-        self.users("1000", "2000")
-        self.login([("1000", 100, None), ("2000", 200, None)])
-        self.assertEqual(grid.current_user(self.root), "2000")
-
-    def test_most_recent_flag_wins(self):
-        self.users("1000", "2000")
-        self.login([("1000", 100, "1"), ("2000", 200, "0")])
-        self.assertEqual(grid.current_user(self.root), "1000")
-
-    def test_unknown(self):
-        self.users("1000", "2000")
-        self.assertIsNone(grid.current_user(self.root))
-        self.assertIsNone(grid.current_user(self.root / "nowhere"))
 
 
 if __name__ == "__main__":

@@ -2,17 +2,20 @@
 Steam games and non-Steam shortcuts. Inspired by decky-steamgriddb by the SteamGridDB
 team (GPL-3.0); written from scratch.
 
-Applying = writing Steam's own files in userdata/<account>/config/grid/ (grid.py), so
-it doesn't depend on Steam's JS API. Then, only if Steam offers it, its
-SetCustomArtworkForApp is called too so the library refreshes at once; without it
-the artwork shows after restarting Steam.
+Applying = downloading the image the user picked (ctx.http, user_chose) and writing Steam's
+own files in userdata/<account>/config/grid/ (ctx.paths, grid.py), so it doesn't depend on
+Steam's JS API. Then, only if Steam offers it, its SetCustomArtworkForApp is called too so
+the library refreshes at once; without it the artwork shows after restarting Steam.
 """
 import base64
+import tempfile
+from pathlib import Path
 
 from . import grid, sgdb
 
 
 ctx = None
+TOO_LARGE = "download too large"  # ctx.http's InvalidArgument past max_bytes
 
 
 def setup(context):
@@ -25,10 +28,11 @@ def _client():
 
 
 def _grid_dir():
-    user = grid.current_user()
-    if user is None:
-        raise ctx.Unavailable("can't tell which Steam account is in use (userdata/)")
-    return grid.grid_dir(user)
+    """The current Steam account's grid folder, or None if there's none (Steam not found, no account)."""
+    try:
+        return ctx.paths.grid_dir()
+    except ctx.Unavailable:
+        return None
 
 
 def _checked(kind=None, appid=None):
@@ -41,20 +45,25 @@ def _checked(kind=None, appid=None):
         raise ctx.InvalidArgument(str(e)) from None
 
 
-def _sgdb(call, *args, **kwargs):
-    """Run a SteamGridDB call; its errors become clean API errors."""
+_RAISE = object()
+
+
+def _sgdb(call, *args, missing=_RAISE, **kwargs):
+    """Run a SteamGridDB call; its errors become clean API errors. With `missing`, a 404
+    (not on SteamGridDB) answers that instead."""
     try:
         return call(*args, **kwargs)
     except sgdb.SGDBError as e:
+        if e.status == 404 and missing is not _RAISE:
+            return missing
         raise ctx.Unavailable(str(e)) from None
 
 
 def status():
-    user = grid.current_user()
+    folder = _grid_dir()
     return {
         "has_key": bool(ctx.settings.get("api_key").strip()),
-        "user": user,
-        "grid_dir": str(grid.grid_dir(user)) if user else None,
+        "user": folder.parent.parent.name if folder else None,  # userdata/<account>/config/grid
     }
 
 
@@ -67,11 +76,9 @@ def match(appid, name=None, shortcut=False):
         return {**chosen, "source": "chosen"}
     client = _client()
     if not shortcut:
-        try:
-            return {**client.game_by_steam(appid), "source": "steam"}
-        except sgdb.SGDBError as e:
-            if e.status != 404:
-                raise ctx.Unavailable(str(e)) from None
+        game = _sgdb(client.game_by_steam, appid, missing=None)
+        if game:
+            return {**game, "source": "steam"}
     if name:
         found = _sgdb(client.search, name)
         if found:
@@ -107,13 +114,7 @@ def assets(kind, appid=None, game_id=None, page=0):
         raise ctx.InvalidArgument("need a game")
     if not isinstance(page, int) or not 0 <= page <= 100:
         raise ctx.InvalidArgument("invalid page")
-    filters = ctx.settings.get()
-    try:
-        return _client().images(kind, filters, page, steam_appid=appid, game_id=game_id)
-    except sgdb.SGDBError as e:
-        if e.status == 404:
-            return []
-        raise ctx.Unavailable(str(e)) from None
+    return _sgdb(_client().images, kind, ctx.settings.get(), page, steam_appid=appid, game_id=game_id, missing=[])
 
 
 def _refresh(call, *args, timeout=15):
@@ -127,19 +128,31 @@ def _refresh(call, *args, timeout=15):
 
 
 def apply(appid, kind, url, allow_big=False):
-    """Download an image from SteamGridDB and make it the app's artwork of that kind.
-    An unusually big image isn't downloaded without the user's OK: the answer is then
-    {"needs_confirm": True, "size_mb": N}, and the UI asks and calls again with allow_big."""
+    """Download the image the user picked on SteamGridDB and make it the app's artwork of that
+    kind. One over sgdb.SOFT_LIMIT isn't kept without the user's OK: the answer is then
+    {"needs_confirm": True, "over_mb": N}, and the UI asks and calls again with allow_big."""
     _checked(kind, appid)
     try:
-        data = _client().download(url, allow_big=bool(allow_big))
+        sgdb.check_download_url(url)
     except sgdb.SGDBError as e:
-        if e.status == 413:
-            return {"needs_confirm": True, "size_mb": round(getattr(e, "size", 0) / (1 << 20))}
-        raise ctx.Unavailable(str(e)) from None
-    folder = _grid_dir()
+        raise ctx.InvalidArgument(str(e)) from None
+    folder = ctx.paths.grid_dir()  # Unavailable: Steam or its account wasn't found
+    limit = sgdb.MAX_DOWNLOAD if allow_big else sgdb.SOFT_LIMIT
     try:
-        path = grid.write(folder, appid, kind, data)
+        folder.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=folder, prefix=".invasor-") as tmp:
+            dest = Path(tmp) / f"{appid}-{kind}"
+            try:
+                ctx.http.download(url, dest, user_chose=True, max_bytes=limit)
+            except ctx.InvalidArgument as e:
+                if str(e) == TOO_LARGE and not allow_big:
+                    return {"needs_confirm": True, "over_mb": sgdb.SOFT_LIMIT >> 20}
+                raise
+            data = dest.read_bytes()
+    except OSError as e:
+        raise ctx.Unavailable(f"can't write {folder}: {e}") from None
+    try:
+        grid.write(folder, appid, kind, data)
     except ValueError as e:
         raise ctx.Unavailable(str(e)) from None
     except OSError as e:
@@ -157,7 +170,8 @@ def apply(appid, kind, url, allow_big=False):
 def clear(appid, kind):
     """Go back to Steam's default artwork of that kind."""
     _checked(kind, appid)
-    removed = grid.remove(_grid_dir(), appid, kind)
+    folder = ctx.paths.grid_dir()  # Unavailable: Steam or its account wasn't found
+    removed = grid.remove(folder, appid, kind)
     refreshed = _refresh("Apps.ClearCustomArtworkForApp", int(appid), grid.KINDS[kind][1])
     return {"removed": removed, "refreshed": refreshed}
 
@@ -165,8 +179,8 @@ def clear(appid, kind):
 def current(appid):
     """{kind: file} of the app's custom artwork, for previews via /customimages/<file>."""
     _checked(appid=appid)
-    user = grid.current_user()
-    return grid.current(grid.grid_dir(user), appid) if user else {}
+    folder = _grid_dir()
+    return grid.current(folder, appid) if folder else {}
 
 
 METHODS = {

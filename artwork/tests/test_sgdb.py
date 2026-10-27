@@ -3,19 +3,9 @@ import json
 import unittest
 import urllib.error
 import urllib.parse
+import urllib.request
 
 import sgdb
-
-
-class Body(io.BytesIO):
-    def __init__(self, raw, length=None):
-        super().__init__(raw)
-        self.headers = {"Content-Length": str(length)} if length is not None else {}
-        self.read_calls = 0
-
-    def read(self, *a):
-        self.read_calls += 1
-        return super().read(*a)
 
 
 class FakeOpener:
@@ -31,8 +21,7 @@ class FakeOpener:
         if self.error:
             raise self.error
         raw = self.answer if isinstance(self.answer, bytes) else json.dumps(self.answer).encode()
-        self.body = Body(raw, getattr(self, "length", None))
-        return self.body
+        return io.BytesIO(raw)
 
 
 class Client(unittest.TestCase):
@@ -106,40 +95,27 @@ class Client(unittest.TestCase):
         with self.assertRaisesRegex(sgdb.SGDBError, "unreadable"):
             self.client.search("x")
 
+    def test_redirects_never_take_the_key_away_from_the_api(self):
+        handler = sgdb._ApiOnly()
+        req = urllib.request.Request(sgdb.API + "/search/autocomplete/x", headers={"Authorization": "Bearer k"})
+        for url in ("https://evil.example/api/v2/x", "http://www.steamgriddb.com/api/v2/x",
+                    "https://www.steamgriddb.com.evil.example/x"):
+            with self.subTest(url=url), self.assertRaises(urllib.error.URLError):
+                handler.redirect_request(req, None, 302, "Found", {}, url)
+        ok = handler.redirect_request(req, None, 301, "Moved", {}, sgdb.API + "/search/autocomplete/y")
+        self.assertEqual(ok.full_url, sgdb.API + "/search/autocomplete/y")
+
     def test_search_term_is_encoded_twice(self):
         self.client.search("Half-Life: 2/Ep")
         self.assertIn("/search/autocomplete/Half-Life%253A%25202%252FEp", self.net.requests[-1].full_url)
 
     def test_downloads_only_from_steamgriddb(self):
-        self.net.answer = b"\x89PNG data"
-        self.assertEqual(self.client.download("https://cdn2.steamgriddb.com/grid/a.png"), b"\x89PNG data")
+        self.assertEqual(sgdb.check_download_url("https://cdn2.steamgriddb.com/grid/a.png"), "https://cdn2.steamgriddb.com/grid/a.png")
         for url in ("http://cdn2.steamgriddb.com/a.png", "https://evil.com/a.png", "https://steamgriddb.com.evil.com/a",
                     "file:///etc/passwd", "", None):
             with self.subTest(url=url), self.assertRaises(sgdb.SGDBError):
-                self.client.download(url)
+                sgdb.check_download_url(url)
 
-    def test_download_size_limits(self):
-        url = "https://cdn2.steamgriddb.com/a.png"
-        self.net.answer = b"x" * 10
-        self.assertEqual(len(self.client.download(url)), 10)
-        # Big by Content-Length: asked first, the body isn't read.
-        self.net.length = sgdb.SOFT_LIMIT + 1
-        with self.assertRaises(sgdb.SGDBError) as cm:
-            self.client.download(url)
-        self.assertEqual((cm.exception.status, cm.exception.size), (413, sgdb.SOFT_LIMIT + 1))
-        self.assertEqual(self.net.body.read_calls, 0)
-        self.assertEqual(len(self.client.download(url, allow_big=True)), 10)
-        # Over the hard cap: never, even when allowed.
-        self.net.length = sgdb.MAX_DOWNLOAD + 1
-        with self.assertRaisesRegex(sgdb.SGDBError, "too large"):
-            self.client.download(url, allow_big=True)
-        # No Content-Length: the real size decides.
-        self.net.length = None
-        self.net.answer = b"x" * (sgdb.SOFT_LIMIT + 1)
-        with self.assertRaises(sgdb.SGDBError) as cm:
-            self.client.download(url)
-        self.assertEqual(cm.exception.status, 413)
-        self.assertEqual(len(self.client.download(url, allow_big=True)), sgdb.SOFT_LIMIT + 1)
 
 if __name__ == "__main__":
     unittest.main()
